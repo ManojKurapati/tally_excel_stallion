@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Local data (database, raw Tally responses, exports, logs)
+data/*.db
+data/*.db-*
+data/raw/*
+data/exports/*
+data/logs/*
+data/azure_local/
+data/health.json
+!data/raw/.gitkeep
+!data/exports/.gitkeep
+!data/logs/.gitkeep
+
+# Windows service tooling
+tools/nssm*/
+tools/*.exe
+
+# OS
+.DS_Store
+Thumbs.db

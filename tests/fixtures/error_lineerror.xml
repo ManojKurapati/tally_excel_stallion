@@ -1,0 +1,11 @@
+<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<STATUS>0</STATUS>
+</HEADER>
+<BODY>
+<DATA>
+<LINEERROR>Could not set 'SVCurrentCompany' due to error: Company 'Nope Ltd' is not loaded</LINEERROR>
+</DATA>
+</BODY>
+</ENVELOPE>
