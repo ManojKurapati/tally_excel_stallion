@@ -48,6 +48,23 @@ BILL_FETCH_FIELDS: tuple[str, ...] = (
     "BILLTYPE",
 )
 
+# Vouchers are exported through a TDL collection rather than the Day Book
+# report: TallyPrime ignores SVFROMDATE/SVTODATE on a Day Book export (it only
+# returns the current date), and the Day Book's ledger entries omit the
+# sales/purchase ledger of invoice-mode vouchers.
+VOUCHER_FETCH_FIELDS: tuple[str, ...] = (
+    "*",
+    "AllLedgerEntries",
+    "AllInventoryEntries",
+    "LedgerEntries",
+    "InventoryEntries",
+)
+
+# Voucher date as a YYYYMMDD number. Compared numerically so the filter does
+# not depend on how Tally parses date strings under the machine's locale
+# (`$$Date:"..."` literals and ##SVFromDate both evaluated to empty dates).
+_VOUCHER_DATE_KEY = "(($$YearOfDate:$Date * 10000) + ($$MonthOfDate:$Date * 100) + $$DayOfDate:$Date)"
+
 MASTER_ACCOUNT_TYPES: dict[str, str] = {
     "groups": "Groups",
     "ledgers": "Ledgers",
@@ -88,6 +105,7 @@ def build_collection_request(
     company: str | None = None,
     static_variables: Mapping[str, str] | None = None,
     filters: Mapping[str, str] | None = None,
+    native_method: str | None = None,
 ) -> bytes:
     """Build a TDL Collection export request.
 
@@ -120,6 +138,8 @@ def build_collection_request(
     fetch_list = list(fetch)
     if fetch_list:
         _sub(collection, "FETCH", ", ".join(fetch_list))
+    if native_method:
+        _sub(collection, "NATIVEMETHOD", native_method)
     for name in filters or {}:
         _sub(collection, "FILTER", name)
     for name, formula in (filters or {}).items():
@@ -170,16 +190,27 @@ def build_masters_request(company: str, dataset: str) -> bytes:
 
 
 def build_day_book_request(company: str, from_date: date, to_date: date) -> bytes:
-    """Export the Day Book (all vouchers) for a date range."""
+    """Export all vouchers dated within a range (inclusive).
+
+    See `VOUCHER_FETCH_FIELDS` for why this is a Voucher collection and not
+    the Day Book report. SVFROMDATE/SVTODATE are still sent; Tally does not
+    rely on them here, the date filter formula does the selection.
+    """
     if to_date < from_date:
         raise ValueError("to_date must not be before from_date")
-    return build_report_export_request(
-        "Day Book",
+    from_key, to_key = to_tally_date(from_date), to_tally_date(to_date)
+    return build_collection_request(
+        "StallionVouchers",
+        "Voucher",
+        VOUCHER_FETCH_FIELDS,
         company=company,
-        static_variables={
-            "SVFROMDATE": to_tally_date(from_date),
-            "SVTODATE": to_tally_date(to_date),
+        static_variables={"SVFROMDATE": from_key, "SVTODATE": to_key},
+        filters={
+            "StallionVoucherInRange": (
+                f"{_VOUCHER_DATE_KEY} >= {from_key} AND {_VOUCHER_DATE_KEY} <= {to_key}"
+            )
         },
+        native_method="*",
     )
 
 

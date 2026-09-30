@@ -305,6 +305,26 @@ def test_parse_bills_collection() -> None:
     assert payable.bill_type == "payable" and payable.overdue_days == 13
 
 
+def test_parse_bills_collection_undeclared_udf_prefix() -> None:
+    # Collection exports use the UDF: prefix without declaring its namespace.
+    xml = b"""<ENVELOPE><BODY><DATA><COLLECTION>
+     <BILL NAME="INV-1 - WHT">
+      <NAME>INV-1 - WHT</NAME><PARENT>Party A</PARENT>
+      <CLOSINGBALANCE TYPE="Amount">-1510500.00</CLOSINGBALANCE>
+      <UDF:_UDF_788551165.LIST DESC="" ISLIST="YES" TYPE="String" INDEX="22012">
+       <UDF:_UDF_788551165 DESC="">ABUJA-HMNL</UDF:_UDF_788551165>
+      </UDF:_UDF_788551165.LIST>
+     </BILL>
+    </COLLECTION></DATA></BODY></ENVELOPE>"""
+    report = ParseReport()
+    bills = parse_bills_collection(xml, COMPANY, report)
+    assert report.rejected == 0 and len(bills) == 1
+    assert bills[0].raw_data["UDF:_UDF_788551165.LIST"] == [
+        {"@DESC": "", "@ISLIST": "YES", "@TYPE": "String", "@INDEX": "22012",
+         "UDF:_UDF_788551165": "ABUJA-HMNL"}
+    ]  # fmt: skip
+
+
 def test_parse_bills_collection_empty() -> None:
     assert parse_bills_collection(fixture_bytes("empty_collection.xml"), COMPANY) == []
 

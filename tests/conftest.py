@@ -131,7 +131,7 @@ class FakeTally:
             return httpx.Response(200, content=fixture_bytes("empty_masters.xml"))
         if report == "List of Accounts":
             return httpx.Response(200, content=self.masters[account_type])
-        if report == "Day Book":
+        if collection_id == "StallionVouchers":
             from_text = root.findtext(".//SVFROMDATE")
             to_text = root.findtext(".//SVTODATE")
             from_date = date(int(from_text[:4]), int(from_text[4:6]), int(from_text[6:]))

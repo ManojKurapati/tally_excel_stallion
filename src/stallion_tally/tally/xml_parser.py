@@ -259,10 +259,15 @@ def _tag_name(element: etree._Element) -> str:
     tag = element.tag
     if not isinstance(tag, str):
         return ""
-    qname = etree.QName(tag)
+    if not tag.startswith("{"):
+        # Plain tag, or a prefixed tag whose namespace Tally never declared
+        # (e.g. `UDF:_UDF_788551165.LIST` in collection exports). lxml keeps
+        # the latter verbatim and `etree.QName` would reject the colon.
+        return tag
+    localname = tag.partition("}")[2]
     if element.prefix:
-        return f"{element.prefix}:{qname.localname}"
-    return qname.localname
+        return f"{element.prefix}:{localname}"
+    return localname
 
 
 def element_to_dict(element: etree._Element) -> Any:

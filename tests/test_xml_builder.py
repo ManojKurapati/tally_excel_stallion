@@ -45,9 +45,20 @@ def test_unknown_master_dataset_rejected() -> None:
 
 def test_day_book_request_dates() -> None:
     root = _root(xml_builder.build_day_book_request("X", date(2026, 1, 5), date(2026, 1, 31)))
-    assert root.findtext(".//REPORTNAME") == "Day Book"
+    assert root.findtext("HEADER/TYPE") == "Collection"
+    collection = root.find(".//COLLECTION")
+    assert collection.findtext("TYPE") == "Voucher"
+    assert "AllLedgerEntries" in collection.findtext("FETCH")
+    assert collection.findtext("NATIVEMETHOD") == "*"
+    assert root.findtext(".//SVCURRENTCOMPANY") == "X"
     assert root.findtext(".//SVFROMDATE") == "20260105"
     assert root.findtext(".//SVTODATE") == "20260131"
+    # Tally ignores SVFROMDATE/SVTODATE here; the filter formula selects the range
+    # by comparing YYYYMMDD numbers.
+    system = root.find(f".//SYSTEM[@NAME='{collection.findtext('FILTER')}']")
+    assert system is not None and system.get("TYPE") == "Formulae"
+    assert ">= 20260105" in system.text and "<= 20260131" in system.text
+    assert "$$YearOfDate:$Date" in system.text
 
 
 def test_day_book_rejects_inverted_range() -> None:
