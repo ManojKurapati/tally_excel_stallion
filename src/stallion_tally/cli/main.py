@@ -255,6 +255,9 @@ def _parse_date(_ctx: click.Context, _param: click.Parameter, value: str | None)
 )
 @click.option("--to", "to_date", callback=_parse_date, help="Voucher window end (YYYY-MM-DD).")
 @click.option("--no-export", is_flag=True, help="Sync to SQLite only; do not upload to Azure.")
+@click.option(
+    "--excel", "with_excel", is_flag=True, help="Also write the Excel verification workbook(s)."
+)
 @click.pass_obj
 def sync(
     app: AppContext,
@@ -263,6 +266,7 @@ def sync(
     from_date: date | None,
     to_date: date | None,
     no_export: bool,
+    with_excel: bool,
 ) -> None:
     """Run the full pipeline: Tally -> SQLite -> Azure."""
     if from_date and to_date and to_date < from_date:
@@ -281,6 +285,9 @@ def sync(
         trigger="cli",
     )
     _print_run(result)
+    if with_excel and result.status != "tally_unavailable":
+        click.echo("")
+        _write_excel_reports(app, companies_opt, from_date, to_date, None)
     if result.status in {"completed", "completed_no_export"}:
         sys.exit(EXIT_OK)
     sys.exit(EXIT_TALLY_UNAVAILABLE if result.status == "tally_unavailable" else EXIT_FAILED)
@@ -395,6 +402,104 @@ def export(app: AppContext, datasets: tuple[str, ...], companies_opt: tuple[str,
         + (f"  error={summary.error}" if summary.error else "")
     )
     sys.exit(EXIT_OK if summary.ok else EXIT_FAILED)
+
+
+def _write_excel_reports(
+    app: AppContext,
+    companies_opt: Sequence[str],
+    from_date: date | None,
+    to_date: date | None,
+    output_dir: Path | None,
+) -> list[Any]:
+    """Write one verification workbook per selected company from the local database."""
+    from stallion_tally.database.repositories import CompanyRepository
+    from stallion_tally.reports import load_company_report, write_company_workbook
+    from stallion_tally.utils.dates import utcnow
+
+    target = output_dir or (app.settings.export_dir / "excel")
+    wanted = {c.lower() for c in companies_opt}
+    generated_at = utcnow()
+    results = []
+    with app.database.session() as session:
+        companies = [
+            c
+            for c in CompanyRepository(session).all()
+            if not c.is_deleted
+            and (
+                not wanted
+                or c.company_name.lower() in wanted
+                or c.company_id.lower() in wanted
+            )
+        ]
+        if not companies:
+            click.echo(
+                "No matching company in the local database. Run 'stallion-tally sync' first"
+                + (" or check the --company value." if wanted else "."),
+                err=True,
+            )
+            return results
+        for company in companies:
+            data = load_company_report(session, company, from_date, to_date)
+            result = write_company_workbook(data, target, generated_at)
+            results.append(result)
+            log.info(
+                "Excel verification workbook written",
+                company=company.company_name,
+                file=str(result.path),
+            )
+    print_table(
+        ["Company", "Vouchers", "Ledgers", "Checks failed", "Checks warn", "File"],
+        [
+            (
+                r.company_name,
+                r.sheet_rows.get("Day Book", 0),
+                r.sheet_rows.get("Ledgers", 0),
+                r.failed_checks,
+                r.warning_checks,
+                str(r.path),
+            )
+            for r in results
+        ],
+    )
+    return results
+
+
+@cli.command("excel")
+@click.option(
+    "--company",
+    "-c",
+    "companies_opt",
+    multiple=True,
+    help="Only these companies (name or id, repeatable). Default: all synced companies.",
+)
+@click.option(
+    "--from", "from_date", callback=_parse_date, help="Voucher period start (YYYY-MM-DD)."
+)
+@click.option("--to", "to_date", callback=_parse_date, help="Voucher period end (YYYY-MM-DD).")
+@click.option(
+    "--output",
+    "-o",
+    "output_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Folder for the workbooks (default: <data dir>/exports/excel).",
+)
+@click.pass_obj
+def excel(
+    app: AppContext,
+    companies_opt: tuple[str, ...],
+    from_date: date | None,
+    to_date: date | None,
+    output_dir: Path | None,
+) -> None:
+    """Write Excel workbooks for a Tally expert to verify the extracted data.
+
+    Reads the local database only (TallyPrime does not need to be running).
+    Without --from/--to the period is the last Day Book window synced from Tally.
+    """
+    if from_date and to_date and to_date < from_date:
+        raise click.BadParameter("--to must not be before --from")
+    results = _write_excel_reports(app, companies_opt, from_date, to_date, output_dir)
+    sys.exit(EXIT_OK if results else EXIT_FAILED)
 
 
 @cli.command("status")

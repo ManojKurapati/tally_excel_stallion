@@ -105,7 +105,29 @@ stallion-tally status                          sync state, pending exports, rece
 stallion-tally health [--json] [--max-age-minutes 30]
 stallion-tally run [--once]                    background agent loop
 stallion-tally config                          effective configuration (secrets masked)
+stallion-tally excel                           Excel verification workbook per company
+stallion-tally excel --company "Stallion Automotive" --from 2026-04-01 --to 2026-09-30
+stallion-tally sync --excel                    sync, then write the workbooks
 ```
+
+## Excel verification workbook (for a Tally expert)
+
+`stallion-tally excel` (or `scripts\export_excel.ps1`) writes one workbook per company to
+`data/exports/excel/` from the local database — TallyPrime does not need to be running.
+Without `--from/--to` the voucher period is the last Day Book window synced from Tally.
+
+| Sheet | What the expert does |
+|-------|----------------------|
+| Read Me | Company, period, bills "as on" date, step-by-step instructions |
+| Summary | Types the figure seen in Tally into the yellow column; `Match` shows OK / MISMATCH. Each row names the TallyPrime screen to open |
+| Checks / Check Details | Automatic checks (voucher Dr = Cr, opening balances agree, unknown ledgers / groups / items, empty vouchers, duplicate numbers) and the rows behind them |
+| Voucher Types | Counts per type vs Tally's Statistics report |
+| Day Book, Voucher Lines, Inventory Lines | Every voucher in the period and its lines, for spot checks |
+| Ledgers, Groups, Stock Items, Bills Outstanding | Masters; ledgers include opening and period Debit / Credit |
+
+Amounts are shown as positive Debit / Credit columns, as in Tally. Optional vouchers are
+listed but excluded from totals; records deleted in Tally are not included. Every sheet
+has a yellow "Expert remarks" column so the file can be returned with findings.
 
 Exit codes: `0` ok, `1` failed/partial, `2` Tally unavailable, `3` configuration problem.
 
