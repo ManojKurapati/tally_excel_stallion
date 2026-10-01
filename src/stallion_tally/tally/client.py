@@ -214,6 +214,21 @@ class TallyClient:
             xml_builder.build_bills_report_request(company, receivable), name=name, save_to=save_to
         )
 
+    def probe_vouchers(
+        self,
+        company: str,
+        from_date: date,
+        to_date: date,
+        voucher_type: str | None = None,
+        save_to: Path | None = None,
+    ) -> TallyResponse:
+        """Lightweight voucher list used by `diagnose-vouchers`."""
+        return self.send(
+            xml_builder.build_voucher_probe_request(company, from_date, to_date, voucher_type),
+            name="voucher_probe",
+            save_to=save_to,
+        )
+
     def get_day_book(
         self, company: str, from_date: date, to_date: date, save_to: Path | None = None
     ) -> TallyResponse:

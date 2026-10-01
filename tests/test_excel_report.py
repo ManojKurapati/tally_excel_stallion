@@ -90,7 +90,11 @@ def test_workbook_matches_local_database(
         ).all()
     summary = summary_values(wb)
     assert summary["Number of ledgers"] == len(ledgers)
-    assert summary["Number of vouchers (all)"] == len(vouchers) > 0
+    assert (
+        summary["Number of vouchers (excluding optional)"]
+        == sum(not v.is_optional for v in vouchers)
+        > 0
+    )
     assert result.sheet_rows["Day Book"] == len(vouchers)
     assert summary["Total Debit"] == pytest.approx(summary["Total Credit"])
 

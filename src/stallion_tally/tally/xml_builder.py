@@ -106,11 +106,15 @@ def build_collection_request(
     static_variables: Mapping[str, str] | None = None,
     filters: Mapping[str, str] | None = None,
     native_method: str | None = None,
+    child_of: str | None = None,
+    belongs_to: bool = False,
 ) -> bytes:
     """Build a TDL Collection export request.
 
     `filters` maps formula names to TDL formula expressions; each formula is
-    declared as a SYSTEM formula and applied to the collection.
+    declared as a SYSTEM formula and applied to the collection. `child_of` /
+    `belongs_to` restrict a collection such as `Vouchers : VoucherType` to one
+    parent (and, with `belongs_to`, everything below it).
     """
     root = etree.Element("ENVELOPE")
     header = _sub(root, "HEADER")
@@ -135,6 +139,10 @@ def build_collection_request(
         ISINTERNAL="No",
     )
     _sub(collection, "TYPE", object_type)
+    if child_of:
+        _sub(collection, "CHILDOF", child_of)
+    if belongs_to:
+        _sub(collection, "BELONGSTO", "Yes")
     fetch_list = list(fetch)
     if fetch_list:
         _sub(collection, "FETCH", ", ".join(fetch_list))
@@ -189,6 +197,86 @@ def build_masters_request(company: str, dataset: str) -> bytes:
     )
 
 
+# Lightweight fields for diagnosing which vouchers a request returns.
+VOUCHER_PROBE_FIELDS: tuple[str, ...] = (
+    "Date",
+    "VoucherTypeName",
+    "VoucherNumber",
+    "GUID",
+    "MasterID",
+    "AlterID",
+    "IsOptional",
+    "IsCancelled",
+    "IsPostDated",
+    "IsDeleted",
+    "PersistedView",
+)
+
+# Reserved Tally voucher types have a built-in function; anything else is a
+# quoted name.
+_RESERVED_VOUCHER_TYPES = {
+    "sales order": "$$VchTypeSalesOrder",
+    "purchase order": "$$VchTypePurchaseOrder",
+    "journal": "$$VchTypeJournal",
+    "sales": "$$VchTypeSales",
+    "purchase": "$$VchTypePurchase",
+    "payment": "$$VchTypePayment",
+    "receipt": "$$VchTypeReceipt",
+    "contra": "$$VchTypeContra",
+    "credit note": "$$VchTypeCreditNote",
+    "debit note": "$$VchTypeDebitNote",
+    "delivery note": "$$VchTypeDeliveryNote",
+    "receipt note": "$$VchTypeRcptNote",
+}
+
+
+def voucher_type_formula(voucher_type: str) -> str:
+    reserved = _RESERVED_VOUCHER_TYPES.get(voucher_type.strip().lower())
+    if reserved:
+        return reserved
+    return '"' + voucher_type.replace('"', "") + '"'
+
+
+def _date_range_filter(from_date: date, to_date: date) -> dict[str, str]:
+    if to_date < from_date:
+        raise ValueError("to_date must not be before from_date")
+    from_key, to_key = to_tally_date(from_date), to_tally_date(to_date)
+    return {
+        "StallionVoucherInRange": (
+            f"{_VOUCHER_DATE_KEY} >= {from_key} AND {_VOUCHER_DATE_KEY} <= {to_key}"
+        )
+    }
+
+
+def build_voucher_probe_request(
+    company: str, from_date: date, to_date: date, voucher_type: str | None = None
+) -> bytes:
+    """List vouchers (few fields) in a date range, optionally only one voucher type.
+
+    With `voucher_type` the collection is `Vouchers : VoucherType` restricted to
+    that type and every type created under it, which is how Tally exposes
+    order vouchers.
+    """
+    filters = _date_range_filter(from_date, to_date)
+    if voucher_type is None:
+        return build_collection_request(
+            "StallionVoucherProbe",
+            "Voucher",
+            VOUCHER_PROBE_FIELDS,
+            company=company,
+            filters=filters,
+        )
+    return build_collection_request(
+        "StallionVoucherProbeByType",
+        "Vouchers : VoucherType",
+        VOUCHER_PROBE_FIELDS,
+        company=company,
+        filters=filters,
+        child_of=voucher_type_formula(voucher_type),
+        belongs_to=True,
+    )
+
+
 def build_day_book_request(company: str, from_date: date, to_date: date) -> bytes:
     """Export all vouchers dated within a range (inclusive).
 
@@ -196,8 +284,7 @@ def build_day_book_request(company: str, from_date: date, to_date: date) -> byte
     the Day Book report. SVFROMDATE/SVTODATE are still sent; Tally does not
     rely on them here, the date filter formula does the selection.
     """
-    if to_date < from_date:
-        raise ValueError("to_date must not be before from_date")
+    filters = _date_range_filter(from_date, to_date)
     from_key, to_key = to_tally_date(from_date), to_tally_date(to_date)
     return build_collection_request(
         "StallionVouchers",
@@ -205,11 +292,7 @@ def build_day_book_request(company: str, from_date: date, to_date: date) -> byte
         VOUCHER_FETCH_FIELDS,
         company=company,
         static_variables={"SVFROMDATE": from_key, "SVTODATE": to_key},
-        filters={
-            "StallionVoucherInRange": (
-                f"{_VOUCHER_DATE_KEY} >= {from_key} AND {_VOUCHER_DATE_KEY} <= {to_key}"
-            )
-        },
+        filters=filters,
         native_method="*",
     )
 

@@ -401,21 +401,21 @@ def _write_summary(wb: Workbook, data: CompanyReportData) -> int:
         ("Opening", "Total opening balance — Credit", opening_cr, TALLY_PATHS["opening"]),
         (
             "Day Book",
-            "Number of vouchers (all)",
-            len(data.vouchers),
-            TALLY_PATHS["day_book"] + period,
+            "Number of vouchers (excluding optional)",
+            sum(not v.is_optional for v in data.vouchers),
+            TALLY_PATHS["statistics"] + " — 'Total' row",
         ),
         (
             "Day Book",
             "  of which cancelled",
-            sum(v.is_cancelled for v in data.vouchers),
-            TALLY_PATHS["statistics"],
+            sum(v.is_cancelled and not v.is_optional for v in data.vouchers),
+            TALLY_PATHS["day_book"] + period,
         ),
         (
             "Day Book",
-            "  of which optional",
+            "Optional vouchers (not in Statistics)",
             sum(v.is_optional for v in data.vouchers),
-            TALLY_PATHS["statistics"],
+            "Gateway of Tally > Display More Reports > Exception Reports > Optional Vouchers",
         ),
         ("Day Book", "Total Debit", period_dr, TALLY_PATHS["day_book"] + period),
         ("Day Book", "Total Credit", period_cr, TALLY_PATHS["day_book"] + period),
@@ -509,24 +509,25 @@ def _write_voucher_types(wb: Workbook, data: CompanyReportData) -> int:
         "Voucher Types",
         [
             Col("Voucher type", 28),
-            Col("Vouchers", 12, INT),
-            Col("Cancelled", 12, INT),
+            Col("Vouchers (excl. optional)", 14, INT),
             Col("Optional", 12, INT),
+            Col("Cancelled", 12, INT),
             Col("Total Debit (posting)", 20, MONEY),
             Col("Tally count", 14, INT, expert=True),
             Col("Match", 12),
             REMARKS,
         ],
-        note=f"Compare with {TALLY_PATHS['statistics']} — period {period_label(data)}",
+        note=f"Compare with {TALLY_PATHS['statistics']} — period {period_label(data)}. "
+        "Tally's Statistics does not count optional vouchers, so they are shown separately.",
     )
     for summary in voucher_type_summaries(data):
         row = sheet.next_row
         sheet.append(
             [
                 summary.voucher_type,
-                summary.count,
-                summary.cancelled,
+                summary.count - summary.optional,
                 summary.optional,
+                summary.cancelled,
                 summary.debit,
                 None,
                 _match_formula("B", "F", row),

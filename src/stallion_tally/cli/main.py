@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import uuid
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -425,11 +426,7 @@ def _write_excel_reports(
             c
             for c in CompanyRepository(session).all()
             if not c.is_deleted
-            and (
-                not wanted
-                or c.company_name.lower() in wanted
-                or c.company_id.lower() in wanted
-            )
+            and (not wanted or c.company_name.lower() in wanted or c.company_id.lower() in wanted)
         ]
         if not companies:
             click.echo(
@@ -500,6 +497,137 @@ def excel(
         raise click.BadParameter("--to must not be before --from")
     results = _write_excel_reports(app, companies_opt, from_date, to_date, output_dir)
     sys.exit(EXIT_OK if results else EXIT_FAILED)
+
+
+@cli.command("diagnose-vouchers")
+@click.option("--company", "-c", "company_opt", required=True, help="Company name or id.")
+@click.option(
+    "--from", "from_date", callback=_parse_date, required=True, help="Period start (YYYY-MM-DD)."
+)
+@click.option(
+    "--to", "to_date", callback=_parse_date, required=True, help="Period end (YYYY-MM-DD)."
+)
+@click.option(
+    "--type",
+    "-t",
+    "voucher_types",
+    multiple=True,
+    help="Voucher type to also request by type (repeatable). "
+    "Default: Sales Order, Purchase Order, Journal.",
+)
+@click.option("--show", default=25, show_default=True, help="Missing vouchers to list.")
+@click.pass_obj
+def diagnose_vouchers_cmd(
+    app: AppContext,
+    company_opt: str,
+    from_date: date,
+    to_date: date,
+    voucher_types: tuple[str, ...],
+    show: int,
+) -> None:
+    """Compare the vouchers Tally returns with those stored locally (read-only).
+
+    Run `sync` for the same period first. Raw Tally responses are kept under
+    <data dir>/raw/diagnose/ so they can be shared for analysis.
+    """
+    from stallion_tally.database.repositories import CompanyRepository
+    from stallion_tally.sync.diagnose import DEFAULT_PROBE_TYPES, diagnose_vouchers
+    from stallion_tally.tally.exceptions import TallyError
+
+    if to_date < from_date:
+        raise click.BadParameter("--to must not be before --from")
+    wanted = company_opt.lower()
+    with app.database.session() as session:
+        company = next(
+            (
+                c
+                for c in CompanyRepository(session).all()
+                if wanted in {c.company_name.lower(), c.company_id.lower()}
+            ),
+            None,
+        )
+        if company is None:
+            click.echo(
+                f"Company {company_opt!r} is not in the local database. Run 'sync' first.",
+                err=True,
+            )
+            sys.exit(EXIT_FAILED)
+        try:
+            result = diagnose_vouchers(
+                session,
+                app.client,
+                company,
+                from_date,
+                to_date,
+                voucher_types or DEFAULT_PROBE_TYPES,
+                raw_dir=app.settings.raw_dir / "diagnose",
+            )
+        except TallyError as exc:
+            click.echo(f"FAILED: {exc}", err=True)
+            sys.exit(EXIT_TALLY_UNAVAILABLE)
+
+    click.echo(f"Company: {result.company_name}   Period: {from_date} to {to_date}")
+    click.echo("")
+    print_table(
+        ["Voucher type", "Local DB", "Tally: plain collection", "Tally: by type"],
+        [
+            (c.voucher_type, c.local, c.plain_collection, "-" if c.by_type is None else c.by_type)
+            for c in result.counts
+        ],
+    )
+    click.echo("")
+    click.echo(f"Vouchers in Tally but not in the local database: {len(result.missing)}")
+    if result.missing:
+        reasons = Counter(
+            "GUID already used by another voucher" if m.stored_as else "never stored"
+            for m in result.missing
+        )
+        click.echo("  " + ", ".join(f"{k}: {v}" for k, v in reasons.items()))
+        click.echo("")
+        print_table(
+            [
+                "Date",
+                "Type",
+                "Number",
+                "Optional",
+                "Post-dated",
+                "Cancelled",
+                "View",
+                "Found by",
+                "GUID stored locally as",
+                "GUID",
+            ],
+            [
+                (
+                    m.voucher.date,
+                    m.voucher.voucher_type,
+                    m.voucher.voucher_number,
+                    m.voucher.is_optional,
+                    m.voucher.is_post_dated,
+                    m.voucher.is_cancelled,
+                    m.voucher.persisted_view,
+                    m.found_by,
+                    m.stored_as,
+                    m.voucher.guid,
+                )
+                for m in result.missing[:show]
+            ],
+        )
+    if result.shared_guids:
+        click.echo("")
+        click.echo(
+            f"GUIDs shared by more than one voucher in Tally: {len(result.shared_guids)} "
+            "(the local database keeps one voucher per GUID)"
+        )
+        for guid, variants in list(result.shared_guids.items())[:10]:
+            click.echo(
+                f"  {guid}: "
+                + "; ".join(f"{v.voucher_type} {v.voucher_number} {v.date}" for v in variants)
+            )
+    click.echo("")
+    click.echo(
+        "Raw Tally responses: " + (str(result.raw_files[0].parent) if result.raw_files else "-")
+    )
 
 
 @cli.command("status")

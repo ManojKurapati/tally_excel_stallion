@@ -938,3 +938,42 @@ def parse_bills_report(
             current[tag] = clean_text(element.text)
     flush()
     return bills
+
+
+@dataclass(frozen=True)
+class ProbedVoucher:
+    """Identity and flags of a voucher, from a lightweight probe request."""
+
+    guid: str | None
+    voucher_type: str | None
+    voucher_number: str | None
+    date: date | None
+    master_id: int | None
+    is_optional: bool
+    is_cancelled: bool
+    is_post_dated: bool
+    is_deleted: bool
+    persisted_view: str | None
+
+
+def parse_voucher_probe(source: bytes | Path) -> list[ProbedVoucher]:
+    """Parse a `build_voucher_probe_request` response."""
+    probed: list[ProbedVoucher] = []
+    for element in iter_elements(source, "VOUCHER"):
+        probed.append(
+            ProbedVoucher(
+                guid=child_text(element, "GUID") or attr_text(element, "REMOTEID"),
+                voucher_type=child_text(element, "VOUCHERTYPENAME")
+                or attr_text(element, "VCHTYPE"),
+                voucher_number=child_text(element, "VOUCHERNUMBER"),
+                date=parse_tally_date(child_text(element, "DATE")),
+                master_id=parse_int(child_text(element, "MASTERID")),
+                is_optional=parse_bool(child_text(element, "ISOPTIONAL")) or False,
+                is_cancelled=parse_bool(child_text(element, "ISCANCELLED")) or False,
+                is_post_dated=parse_bool(child_text(element, "ISPOSTDATED")) or False,
+                is_deleted=parse_bool(child_text(element, "ISDELETED")) or False,
+                persisted_view=child_text(element, "PERSISTEDVIEW")
+                or attr_text(element, "OBJVIEW"),
+            )
+        )
+    return probed
