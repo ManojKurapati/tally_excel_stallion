@@ -27,6 +27,7 @@ from stallion_tally import __version__
 from stallion_tally.reports.checks import (
     ZERO,
     CheckResult,
+    counts_in_books,
     ledger_movements,
     period_totals,
     postings_by_voucher,
@@ -321,10 +322,17 @@ def _write_read_me(wb: Workbook, data: CompanyReportData, generated_at: datetime
             "Credit columns, as in Tally.",
         ),
         (
-            "Item invoices",
-            "The Sales / Purchase ledger amount of an item invoice is taken from "
-            "the accounting allocation of each stock line (shown as 'Item invoice' in Voucher "
-            "Lines), so voucher totals match Tally.",
+            "Non-accounting vouchers",
+            "Orders, Delivery Notes and Receipt Notes (invoice-view vouchers that are not "
+            "invoices) are listed with 'Posts to books' = No and left out of all Debit / Credit "
+            "totals and ledger movements, as in Tally.",
+        ),
+        (
+            "Statistics roll-up",
+            "Tally's Statistics adds vouchers of types created under a built-in type into that "
+            "built-in type's row and the Total (e.g. Journal includes IC JV Expenses). This "
+            "workbook counts each voucher under its own type, so compare a built-in type with "
+            "its own count plus its sub-types.",
         ),
         (
             "Cancelled vouchers",
@@ -518,7 +526,9 @@ def _write_voucher_types(wb: Workbook, data: CompanyReportData) -> int:
             REMARKS,
         ],
         note=f"Compare with {TALLY_PATHS['statistics']} — period {period_label(data)}. "
-        "Tally's Statistics does not count optional vouchers, so they are shown separately.",
+        "Tally's Statistics does not count optional vouchers, so they are shown separately. "
+        "It also adds sub-types into their built-in type's row (e.g. Journal includes "
+        "IC JV Expenses): compare such rows with the sum of the types under them.",
     )
     for summary in voucher_type_summaries(data):
         row = sheet.next_row
@@ -551,6 +561,7 @@ def _write_day_book(wb: Workbook, data: CompanyReportData) -> int:
             Col("Reference", 18),
             Col("Cancelled", 10),
             Col("Optional", 10),
+            Col("Posts to books", 10),
             Col("Ledger lines", 8, INT),
             Col("Inventory lines", 8, INT),
             Col("Tally GUID", 40),
@@ -573,6 +584,7 @@ def _write_day_book(wb: Workbook, data: CompanyReportData) -> int:
                 v.reference,
                 v.is_cancelled,
                 v.is_optional,
+                counts_in_books(v),
                 v.ledger_entry_count,
                 v.inventory_entry_count,
                 v.tally_guid,

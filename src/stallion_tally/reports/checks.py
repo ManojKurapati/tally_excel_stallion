@@ -64,9 +64,38 @@ def split_dr_cr(amount: Decimal | None) -> tuple[Decimal | None, Decimal | None]
     return (-amount, None) if amount < 0 else (None, amount)
 
 
+INVOICE_VIEW = "Invoice Voucher View"
+
+
+def is_non_accounting(voucher: object) -> bool:
+    """Orders, delivery notes and receipt notes: invoice-view vouchers that are not invoices.
+
+    Their ledger lines are informational; Tally does not post them to the books.
+    """
+    return (
+        voucher.persisted_view == INVOICE_VIEW  # type: ignore[attr-defined]
+        and voucher.is_invoice is False  # type: ignore[attr-defined]
+    )
+
+
 def counts_in_books(voucher: object) -> bool:
-    """Optional vouchers do not post to the books and cancelled ones carry no amounts."""
-    return not (voucher.is_cancelled or voucher.is_optional)  # type: ignore[attr-defined]
+    """Whether the voucher's amounts reach the ledgers.
+
+    Optional vouchers do not post, cancelled ones carry no amounts and
+    non-accounting vouchers (orders, delivery/receipt notes) only move or
+    promise stock.
+    """
+    return not (
+        voucher.is_cancelled  # type: ignore[attr-defined]
+        or voucher.is_optional  # type: ignore[attr-defined]
+        or is_non_accounting(voucher)
+    )
+
+
+def ledger_list_is_complete(voucher: object) -> bool:
+    """True when Tally sent ALLLEDGERENTRIES, which already holds the sales/purchase ledger."""
+    raw = voucher.raw_json  # type: ignore[attr-defined]
+    return isinstance(raw, dict) and "ALLLEDGERENTRIES.LIST" in raw
 
 
 @dataclass(frozen=True)
@@ -85,13 +114,16 @@ class Posting:
 
 
 def postings_by_voucher(data: CompanyReportData) -> dict[str, list[Posting]]:
-    """Ledger postings per voucher, including the item-invoice ledger postings.
+    """Ledger postings per voucher, including item-invoice ledger postings when needed.
 
-    In item invoices (Sales/Purchase in Item Invoice mode) Tally puts the Sales or
-    Purchase ledger amount inside each stock line's accounting allocation, not in
-    the ledger entries. Stock lines without an accounting ledger (delivery notes,
-    stock journals) post nothing to ledgers and are skipped.
+    Tally's ALLLEDGERENTRIES list (the voucher collection request) already
+    contains the Sales/Purchase ledger of an item invoice. Only when a response
+    carries just LEDGERENTRIES (the older Day Book export) is that ledger
+    missing; it then lives in each stock line's accounting allocation and is
+    added from there. Non-invoice vouchers (orders, delivery notes, stock
+    journals) never take amounts from stock lines.
     """
+    vouchers = {v.tally_guid: v for v in data.vouchers}
     result: dict[str, list[Posting]] = defaultdict(list)
     for e in data.ledger_entries:
         result[e.voucher_guid].append(
@@ -107,7 +139,13 @@ def postings_by_voucher(data: CompanyReportData) -> dict[str, list[Posting]]:
             )
         )
     for e in data.inventory_entries:
-        if not e.accounting_ledger:
+        voucher = vouchers.get(e.voucher_guid)
+        if (
+            not e.accounting_ledger
+            or voucher is None
+            or voucher.is_invoice is not True
+            or ledger_list_is_complete(voucher)
+        ):
             continue
         debit, credit = split_dr_cr(e.amount)
         result[e.voucher_guid].append(

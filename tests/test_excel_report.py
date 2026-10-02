@@ -102,7 +102,7 @@ def test_workbook_matches_local_database(
     ws = wb["Summary"]
     assert ws["E3"].value == '=IF(D3="","",IF(ABS(C3-D3)<0.01,"OK","MISMATCH"))'
 
-    guids = {row[12] for row in wb["Day Book"].iter_rows(min_row=3, values_only=True)}
+    guids = {row[13] for row in wb["Day Book"].iter_rows(min_row=3, values_only=True)}
     assert guids == {v.tally_guid for v in vouchers}
 
     # Item invoice: the Sales ledger credit comes from the stock line's accounting allocation.
@@ -143,7 +143,7 @@ def test_tally_text_is_never_written_as_formula(
     _, result = build(database, tmp_path)
 
     ws = load_workbook(result.path)["Day Book"]
-    cells = [row[6] for row in ws.iter_rows(min_row=3) if row[12].value == SALES_GUID]
+    cells = [row[6] for row in ws.iter_rows(min_row=3) if row[13].value == SALES_GUID]
     assert cells[0].value == evil
     assert cells[0].data_type == "s"
 
@@ -216,3 +216,84 @@ def test_cli_excel_command(manager: SyncManager, settings: Settings, tmp_path: P
         ],
     )
     assert missing.exit_code == 1
+
+
+def _report(vouchers, ledger_entries, inventory_entries):
+    from types import SimpleNamespace
+
+    from stallion_tally.reports.loader import CompanyReportData
+
+    data = CompanyReportData(SimpleNamespace(), None, None, "test")
+    data.vouchers = [SimpleNamespace(**v) for v in vouchers]
+    data.ledger_entries = [SimpleNamespace(**e) for e in ledger_entries]
+    data.inventory_entries = [SimpleNamespace(**e) for e in inventory_entries]
+    return data
+
+
+def _vch(guid: str, *, view: str, invoice: bool, raw_keys: tuple[str, ...]) -> dict:
+    return dict(
+        tally_guid=guid,
+        voucher_type="T",
+        voucher_number=guid,
+        date=date(2026, 1, 1),
+        party_ledger_name=None,
+        persisted_view=view,
+        is_invoice=invoice,
+        is_cancelled=False,
+        is_optional=False,
+        raw_json=dict.fromkeys(raw_keys, []),
+        ledger_entry_count=1,
+        inventory_entry_count=1,
+    )
+
+
+def _line(guid: str, n: int, ledger: str, amount: str) -> dict:
+    debit, credit = split_dr_cr(Decimal(amount))
+    return dict(
+        voucher_guid=guid,
+        line_no=n,
+        ledger_name=ledger,
+        debit=debit,
+        credit=credit,
+        bill_allocations_json=None,
+        is_party_ledger=None,
+    )
+
+
+def _stock(guid: str, amount: str) -> dict:
+    return dict(
+        voucher_guid=guid, line_no=1, stock_item_name="Item", accounting_ledger="Sales",
+        amount=Decimal(amount),
+    )  # fmt: skip
+
+
+def test_item_invoice_postings_follow_tally_ledger_list() -> None:
+    from stallion_tally.reports.checks import (
+        check_vouchers_balanced,
+        ledger_movements,
+        period_totals,
+    )
+
+    invoice_view = "Invoice Voucher View"
+    data = _report(
+        [
+            # Collection export: ALLLEDGERENTRIES already holds the Sales ledger.
+            _vch("full", view=invoice_view, invoice=True, raw_keys=("ALLLEDGERENTRIES.LIST",)),
+            # Older Day Book export: Sales ledger only on the stock line.
+            _vch("old", view=invoice_view, invoice=True, raw_keys=("LEDGERENTRIES.LIST",)),
+            # Sales order: not an invoice, never posts.
+            _vch("order", view=invoice_view, invoice=False, raw_keys=("ALLLEDGERENTRIES.LIST",)),
+        ],
+        [
+            _line("full", 1, "Party", "-100"),
+            _line("full", 2, "Sales", "100"),
+            _line("old", 1, "Party", "-50"),
+            _line("order", 1, "Party", "-70"),
+        ],
+        [_stock("full", "100"), _stock("old", "50"), _stock("order", "70")],
+    )
+    assert check_vouchers_balanced(data).status == "PASS"
+    assert period_totals(data) == (Decimal("150"), Decimal("150"))
+    movements = ledger_movements(data)
+    assert movements["Sales"].credit == Decimal("150")
+    assert movements["Party"].debit == Decimal("150")
